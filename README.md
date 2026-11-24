@@ -19,26 +19,29 @@ Webhook → Config → Validate → Valid? ─ yes → Create ID → Already sav
 
 ## Demo
 
-<!-- TODO: add these screenshots to docs/images/ -->
+These screenshots come from a real run of the workflows in n8n 2.48.8. Google Sheets and the mail server were replaced by local stand-ins, so the sheet and email images show the data the workflow actually sent, in a plain layout.
+
+A successful run. Every step on the success path is green, and the notification email was accepted by the mail server:
+
+![Screenshot: a successful run in the n8n editor](docs/images/successful-run.png)
+
+The full workflow, including the branches for duplicates, rejected input, and failures:
 
 ![Screenshot: form workflow in the n8n editor](docs/images/workflow-canvas.png)
 
+Sending a test submission with a short-lived token:
+
 ![Screenshot: test request returning 200](docs/images/test-request.png)
+
+The rows the workflow saved, and the notification email for the first one:
 
 ![Screenshot: saved rows in the Submissions tab](docs/images/sheet-submissions.png)
 
 ![Screenshot: notification email](docs/images/notification-email.png)
 
+When Google Sheets returned errors, the sender got a `503`, the failure was logged, and an alert was sent with a link to the run:
+
 ![Screenshot: failure alert email and Failures tab](docs/images/error-alert.png)
-
-Shots to take:
-
-1. `workflow-canvas.png`: the full form workflow in the n8n editor, zoomed so every node name is readable.
-2. `test-request.png`: a terminal running the test `curl` command from Getting started, showing the `200` response with its submission ID.
-3. `sheet-submissions.png`: the `Submissions` tab with a few test rows. Use fake names and emails.
-4. `notification-email.png`: the notification email for one of those rows.
-5. `error-alert.png`: an alert email next to its row in the `Failures` tab. You can trigger one by temporarily setting a wrong `spreadsheetId` in the form workflow's `Config` node.
-6. Optional `demo.gif`: under 15 seconds, from sending a request to the row appearing in the sheet.
 
 ## Tech stack
 
