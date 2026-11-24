@@ -202,3 +202,7 @@ npm test
 ```
 
 Edit `src/validate-submission.js` or `scripts/build.mjs`, not the generated files in `workflows/`.
+
+## License
+
+Released into the public domain under the [Unlicense](LICENSE).

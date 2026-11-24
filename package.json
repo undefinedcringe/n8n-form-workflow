@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "license": "Unlicense",
   "description": "n8n workflow: form submission to Google Sheets with email notification and failure handling",
   "scripts": {
     "build": "node scripts/build.mjs",
