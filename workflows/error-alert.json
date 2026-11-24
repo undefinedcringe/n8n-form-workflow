@@ -1,0 +1,157 @@
+{
+  "id": "formErrorAlert01",
+  "name": "Form Workflow Error Alert",
+  "nodes": [
+    {
+      "id": "b88143c5-60b1-489c-afc4-3ca4842f61ae",
+      "name": "On Workflow Error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "87e89abb-4c1c-451f-a08d-355d097f18b8",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "23614c70-23a4-4a5c-a4d3-505dcf443ab3",
+              "name": "spreadsheetId",
+              "value": "REPLACE_WITH_SPREADSHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "1876e240-ed83-4d9a-ac90-d936c330f7e7",
+              "name": "notifyEmail",
+              "value": "REPLACE_WITH_NOTIFY_EMAIL",
+              "type": "string"
+            },
+            {
+              "id": "23e9b4ad-755b-49bd-a61b-b2d63bfabc21",
+              "name": "fromEmail",
+              "value": "REPLACE_WITH_FROM_EMAIL",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fef67897-8618-446c-a3b1-d5f0cf62b2ab",
+      "name": "Log Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ encodeURIComponent($('Config').first().json.spreadsheetId) }}/values/Failures!A:D:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            },
+            {
+              "name": "insertDataOption",
+              "value": "INSERT_ROWS"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[new Date().toISOString(), $('On Workflow Error').first().json.workflow.name, $('On Workflow Error').first().json.execution.lastNodeExecuted, String($('On Workflow Error').first().json.execution.id)]] }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b90d7405-0e84-4896-a180-21537fc33e60",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $('Config').first().json.notifyEmail }}",
+        "subject": "=n8n workflow failed: {{ $('On Workflow Error').first().json.workflow.name }}",
+        "emailFormat": "text",
+        "text": "=Workflow: {{ $('On Workflow Error').first().json.workflow.name }}\nFailed node: {{ $('On Workflow Error').first().json.execution.lastNodeExecuted }}\nExecution: {{ $('On Workflow Error').first().json.execution.id }}\nDetails: {{ $('On Workflow Error').first().json.execution.url }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "On Workflow Error": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Log Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Failure": {
+      "main": [
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 120,
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {}
+}

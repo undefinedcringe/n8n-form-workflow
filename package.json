@@ -1,0 +1,11 @@
+{
+  "name": "form-submission-workflow",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "n8n workflow: form submission to Google Sheets with email notification and failure handling",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test test/"
+  }
+}

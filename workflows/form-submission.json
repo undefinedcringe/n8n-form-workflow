@@ -1,0 +1,563 @@
+{
+  "id": "formSubmission01",
+  "name": "Form Submission to Sheets and Email",
+  "nodes": [
+    {
+      "id": "bff0bca9-77e7-4c43-a4dd-be133c68b72c",
+      "name": "Form Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "form-submission",
+        "authentication": "jwtAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "3f8491ae-ba24-46af-ae1c-b8a51a91fadb"
+    },
+    {
+      "id": "87e89abb-4c1c-451f-a08d-355d097f18b8",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "23614c70-23a4-4a5c-a4d3-505dcf443ab3",
+              "name": "spreadsheetId",
+              "value": "REPLACE_WITH_SPREADSHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "1876e240-ed83-4d9a-ac90-d936c330f7e7",
+              "name": "notifyEmail",
+              "value": "REPLACE_WITH_NOTIFY_EMAIL",
+              "type": "string"
+            },
+            {
+              "id": "23e9b4ad-755b-49bd-a61b-b2d63bfabc21",
+              "name": "fromEmail",
+              "value": "REPLACE_WITH_FROM_EMAIL",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d0f1f811-91ff-4916-aadb-f765ed114363",
+      "name": "Validate Submission",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Runs inside an n8n Code node. Embedded into the workflow by scripts/build.mjs.\n// Only allowlisted fields leave this node. Unknown input is dropped.\n\nconst LIMITS = { name: 100, email: 254, message: 5000 };\nconst MAX_TOKEN_LIFETIME_SECONDS = 300;\nconst DEDUPE_WINDOW_MS = 10 * 60 * 1000;\nconst ALLOWED_CONTENT_TYPES = new Set(['application/json', 'application/x-www-form-urlencoded']);\nconst HONEYPOT_FIELD = 'website';\nconst IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;\nconst EMAIL_PATTERN =\n  /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/;\n\n// Format characters include text-reversing and zero-width marks.\n// Joiners stay because emoji and several written languages need them.\nconst HIDDEN_FORMAT = /(?![‌‍])\\p{Cf}/gu;\nconst VISIBLE = /[\\p{L}\\p{N}\\p{P}\\p{S}]/u;\n\nconst asText = (value) => (typeof value === 'string' ? value.normalize('NFC') : '');\n\n// Single-line fields lose all control characters, which blocks email header injection.\nconst cleanLine = (value) =>\n  asText(value)\n    .replace(/[\\p{Cc}\\p{Zl}\\p{Zp}]+/gu, ' ')\n    .replace(HIDDEN_FORMAT, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\nconst cleanMultiline = (value) =>\n  asText(value)\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/(?![\\n\\t])\\p{Cc}|[\\p{Zl}\\p{Zp}]/gu, '')\n    .replace(HIDDEN_FORMAT, '')\n    .trim();\n\n// Stops spreadsheet apps from running user input as a formula, including after CSV export.\nconst guardCell = (value) => (/^[=+\\-@\\t\\r]/.test(value) ? `'${value}` : value);\n\n// Rejects huge values before any expensive text processing runs.\nconst isOversized = (value, limit) => typeof value === 'string' && value.length > limit * 2;\n\nconst isHoneypotFilled = (value) =>\n  typeof value === 'string' ? cleanLine(value.slice(0, 100)) !== '' : value !== undefined && value !== null;\n\nconst reject = (statusCode, message, errors) => ({\n  valid: false,\n  statusCode,\n  response: { ok: false, message, ...(errors ? { errors } : {}) },\n});\n\n// n8n verifies the signature and expiry, but accepts tokens that never expire.\nconst hasShortLivedToken = (payload, nowMs) => {\n  if (!Number.isInteger(payload?.exp)) return false;\n  const remaining = payload.exp - Math.floor(nowMs / 1000);\n  return remaining > 0 && remaining <= MAX_TOKEN_LIFETIME_SECONDS;\n};\n\nconst contentTypeOf = (headers) =>\n  String(headers?.['content-type'] ?? '').split(';')[0].trim().toLowerCase();\n\nfunction validateFields(body) {\n  const errors = {};\n  for (const field of Object.keys(LIMITS)) {\n    if (isOversized(body[field], LIMITS[field])) {\n      errors[field] = `${field} must be ${LIMITS[field]} characters or fewer.`;\n    }\n  }\n  if (Object.keys(errors).length > 0) return { errors };\n\n  const name = cleanLine(body.name);\n  const email = cleanLine(body.email).toLowerCase();\n  const message = cleanMultiline(body.message);\n\n  if (!VISIBLE.test(name)) errors.name = 'Name is required.';\n  else if (name.length > LIMITS.name) errors.name = `name must be ${LIMITS.name} characters or fewer.`;\n\n  if (!email) errors.email = 'Email is required.';\n  else if (email.length > LIMITS.email || !EMAIL_PATTERN.test(email)) errors.email = 'Email is not valid.';\n\n  if (!VISIBLE.test(message)) errors.message = 'Message is required.';\n  else if (message.length > LIMITS.message) errors.message = `message must be ${LIMITS.message} characters or fewer.`;\n\n  const key = body.idempotency_key;\n  if (key !== undefined && (typeof key !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(key))) {\n    errors.idempotency_key = 'idempotency_key must be 16 to 64 letters, digits, hyphens, or underscores.';\n  }\n\n  return { errors, fields: { name, email, message } };\n}\n\nfunction validate(webhook, nowMs) {\n  const { body, headers, jwtPayload } = webhook.json;\n\n  if (!hasShortLivedToken(jwtPayload, nowMs)) {\n    return reject(401, 'Authorization token must expire within 5 minutes.');\n  }\n  if (!ALLOWED_CONTENT_TYPES.has(contentTypeOf(headers)) || Object.keys(webhook.binary ?? {}).length > 0) {\n    return reject(415, 'Send the form as JSON or URL-encoded data without files.');\n  }\n  if (body === null || typeof body !== 'object' || Array.isArray(body)) {\n    return reject(400, 'Request body must be a form or JSON object.');\n  }\n\n  // Bots get the normal success reply and nothing is stored.\n  if (isHoneypotFilled(body[HONEYPOT_FIELD])) {\n    return {\n      valid: false,\n      statusCode: 202,\n      response: { ok: true, message: 'Thanks, your submission was received.' },\n    };\n  }\n\n  const { errors, fields } = validateFields(body);\n  if (Object.keys(errors).length > 0) {\n    return reject(422, 'Please correct the highlighted fields.', errors);\n  }\n\n  const { name, email, message } = fields;\n  const submittedAt = new Date(nowMs).toISOString();\n  const window = Math.floor(nowMs / DEDUPE_WINDOW_MS);\n\n  return {\n    valid: true,\n    statusCode: 200,\n    // Hashed by the next node into a submission ID that survives n8n database resets.\n    dedupe_source: body.idempotency_key\n      ? JSON.stringify(['key', body.idempotency_key])\n      : JSON.stringify(['content', window, name, email, message]),\n    submission: { submitted_at: submittedAt, name, email, message },\n    sheet: {\n      submitted_at: submittedAt,\n      name: guardCell(name),\n      email: guardCell(email),\n      message: guardCell(message),\n    },\n  };\n}\n\nreturn [{ json: validate($('Form Webhook').first(), Date.now()) }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "1ca9f7be-b013-4bd8-a284-e0fe01530425",
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "92d30511-bb79-47a5-a840-8e7ebdb81657",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "316dc5ae-7e52-46a3-ae2d-6ed44b232689",
+      "name": "Create Submission ID",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        900,
+        100
+      ],
+      "parameters": {
+        "action": "hash",
+        "type": "SHA256",
+        "value": "={{ $json.dedupe_source }}",
+        "dataPropertyName": "hash",
+        "encoding": "hex"
+      }
+    },
+    {
+      "id": "6bd6d865-e5fa-478c-a2da-e8191bcb0bef",
+      "name": "Check Existing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ encodeURIComponent($('Config').first().json.spreadsheetId) }}/values/Submissions!A:A",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "majorDimension",
+              "value": "COLUMNS"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c2903084-4122-4411-ab87-33ac9a8fbcb7",
+      "name": "Already Saved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1340,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "272c269a-cc48-4bf5-ae1f-d7f02bdce609",
+              "leftValue": "={{ ($json.values?.[0] ?? []).includes(('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32))) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "3b7c7de6-6008-4cb0-a665-a881620a6b89",
+      "name": "Save to Sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ encodeURIComponent($('Config').first().json.spreadsheetId) }}/values/Submissions!A:E:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            },
+            {
+              "name": "insertDataOption",
+              "value": "INSERT_ROWS"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32)), $('Validate Submission').first().json.sheet.submitted_at, $('Validate Submission').first().json.sheet.name, $('Validate Submission').first().json.sheet.email, $('Validate Submission').first().json.sheet.message]] }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "5e0da7aa-ee4a-4dff-a861-266fff7db9fe",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1780,
+        40
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'Thanks, your submission was received.', id: ('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32)) } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "1275a7fe-5eba-4b0c-a2aa-2c3074a4126f",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2000,
+        40
+      ],
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $('Config').first().json.notifyEmail }}",
+        "subject": "=New form submission {{ ('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32)) }}",
+        "emailFormat": "text",
+        "text": "=A new form submission was saved.\n\nSubmission: {{ ('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32)) }}\nReceived: {{ $('Validate Submission').first().json.submission.submitted_at }}\nName: {{ $('Validate Submission').first().json.submission.name }}\nEmail: {{ $('Validate Submission').first().json.submission.email }}\n\nMessage:\n{{ $('Validate Submission').first().json.submission.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "390077cb-7b50-477f-a4d8-99f62ebe3f47",
+      "name": "Flag Email Failure",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        40
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Notification email could not be sent. The submission is saved."
+      }
+    },
+    {
+      "id": "04e8b981-c18f-4aac-acd7-7e217941435a",
+      "name": "Respond Duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'Thanks, your submission was received.', id: ('sub-' + $('Create Submission ID').first().json.hash.slice(0, 32)) } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "c0bdc447-e9ac-4e58-a14f-a517675daef1",
+      "name": "Respond Unavailable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1780,
+        260
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, message: 'We could not save your submission. Please try again shortly.' } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "2b64c0d3-d064-4e4d-a7e1-d0e2b4a21241",
+      "name": "Flag Save Failure",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        260
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Submission was not saved. Recover it from this failed run."
+      }
+    },
+    {
+      "id": "dc32158d-c97c-406d-a58a-9d67ab063258",
+      "name": "Respond Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        340
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('Validate Submission').first().json.response }}",
+        "options": {
+          "responseCode": "={{ $('Validate Submission').first().json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "50834df1-0620-4be7-a8da-e9192314cb6f",
+      "name": "Respond Internal Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, message: 'Something went wrong. Please try again later.' } }}",
+        "options": {
+          "responseCode": 500
+        }
+      }
+    },
+    {
+      "id": "dd0094f9-28a5-4c23-a463-6d7cbe255cca",
+      "name": "Flag Validation Failure",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        900,
+        480
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Validation crashed. Recover the submission from this failed run."
+      }
+    }
+  ],
+  "connections": {
+    "Form Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Validate Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Submission": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Internal Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "Create Submission ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Submission ID": {
+      "main": [
+        [
+          {
+            "node": "Check Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing": {
+      "main": [
+        [
+          {
+            "node": "Already Saved?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Saved?": {
+      "main": [
+        [
+          {
+            "node": "Respond Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Success": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notification": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Flag Email Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Unavailable": {
+      "main": [
+        [
+          {
+            "node": "Flag Save Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Internal Error": {
+      "main": [
+        [
+          {
+            "node": "Flag Validation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 1500,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false,
+    "errorWorkflow": "formErrorAlert01"
+  },
+  "pinData": {}
+}

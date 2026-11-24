@@ -1,0 +1,21 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Secrets and local settings (deploy/n8n.env.example is safe to commit)
+.env
+.env.*
+*.env
+!*.env.example
+
+# Local n8n data (contains credentials and run history)
+.n8n/
+
+# Test and coverage output
+coverage/
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
